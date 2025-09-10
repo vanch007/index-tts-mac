@@ -51,7 +51,7 @@ class IndexTTS:
             self.use_cuda_kernel = False
         elif hasattr(torch, "mps") and torch.backends.mps.is_available():
             self.device = "mps"
-            self.use_fp16 = False  # Use float16 on MPS is overhead than float32
+            self.use_fp16 = True
             self.use_cuda_kernel = False
         else:
             self.device = "cpu"

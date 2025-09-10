@@ -420,6 +420,7 @@ class UnifiedVoice(nn.Module):
             n_head=self.heads,
             gradient_checkpointing=False,
             use_cache=True,
+            _attn_implementation="sdpa"
         )
         self.inference_model = GPT2InferenceModel(
             gpt_config,
@@ -726,6 +727,7 @@ class UnifiedVoice(nn.Module):
                                             eos_token_id=self.stop_mel_token, attention_mask=attention_mask,
                                             max_length=max_length, logits_processor=logits_processor,
                                             num_return_sequences=num_return_sequences,
+                                            remove_invalid_values=True,
                                             **hf_generate_kwargs)
         if isinstance(output, torch.Tensor):
             return output[:, trunc_index:], speech_conditioning_latent
