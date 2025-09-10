@@ -243,6 +243,33 @@ uv run python webui.py -h
 Have fun!
 
 
+#### 🚀 API Server
+
+You can also run IndexTTS2 as an API server.
+
+```bash
+uv run api_server.py
+```
+
+The server will be available at `http://127.0.0.1:8000`. You can change the host and port with the `--host` and `--port` arguments.
+
+You can also enable FP16 inference with the `--fp16` flag:
+
+```bash
+uv run api_server.py --fp16
+```
+
+Here is an example of how to use the API with `curl`:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/tts" -H "Content-Type: application/json" -d '{
+  "text": "Hello, this is a test.",
+  "spk_audio_prompt": "examples/voice_01.wav",
+  "output_path": "outputs/api_gen.wav"
+}' --output outputs/api_gen.wav
+```
+
+
 #### 📝 Using IndexTTS2 in Python
 
 To run scripts, you *must* use the `uv run <file.py>` command to ensure that
