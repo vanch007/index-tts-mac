@@ -14,6 +14,7 @@ import warnings
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*`past_key_values` is deprecated.*")
 
 from omegaconf import OmegaConf
 
@@ -37,7 +38,7 @@ import torch.nn.functional as F
 
 class IndexTTS2:
     def __init__(
-            self, cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_fp16=False, device=None,
+            self, cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_fp16=True, device=None,
             use_cuda_kernel=None,use_deepspeed=False
     ):
         """
@@ -532,7 +533,8 @@ class IndexTTS2:
                                                                  ylens=target_lengths,
                                                                  n_quantizers=3,
                                                                  f0=None)[0]
-                    cat_condition = torch.cat([prompt_condition, cond], dim=1)
+                    prompt_condition_expanded = prompt_condition.expand(cond.shape[0], -1, -1)
+                    cat_condition = torch.cat([prompt_condition_expanded, cond], dim=1)
                     vc_target = self.s2mel.models['cfm'].inference(cat_condition,
                                                                    torch.LongTensor([cat_condition.size(1)]).to(
                                                                        cond.device),
@@ -690,7 +692,7 @@ class QwenEmotion:
             # print(">> parsing QwenEmotion response", content)
             content = {
                 m.group(1): float(m.group(2))
-                for m in re.finditer(r'([^\s":.,]+?)"?\s*:\s*([\d.]+)', content)
+                for m in re.finditer(r'([^":.,]+?)"?\s*:\s*([\d.]+)', content)
             }
             # print(">> dict result", content)
 

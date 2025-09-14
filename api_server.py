@@ -136,7 +136,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="IndexTTS API Server")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to run the API server on.")
     parser.add_argument("--port", type=int, default=8000, help="Port to run the API server on.")
-    parser.add_argument("--fp16", action="store_true", default=False, help="Use FP16 for inference if available")
+    parser.add_argument("--fp16", action="store_true", default=True, help="Use FP16 for inference if available")
     args = parser.parse_args()
     kill_process_on_port(args.port)
     print("Starting API server...")

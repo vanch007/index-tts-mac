@@ -448,6 +448,12 @@ class UnifiedVoice(nn.Module):
         else:
             self.inference_model = self.inference_model.eval()
 
+        if torch.backends.mps.is_available() and hasattr(torch, 'compile'):
+            # Check for a version of torch that supports torch.compile on MPS
+            if int(torch.__version__.split('.')[0]) >= 2:
+                print(">> Compiling model for MPS, please wait...")
+                self.inference_model = torch.compile(self.inference_model)
+
         # self.inference_model = PrunedGPT2InferenceModel(gpt_config, self.gpt, self.mel_pos_embedding, self.mel_embedding, self.final_norm, self.mel_head)
         self.gpt.wte = self.mel_embedding
 

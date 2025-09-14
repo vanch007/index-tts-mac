@@ -355,66 +355,61 @@ tts.infer(spk_audio_prompt='examples/voice_12.wav', text=text, output_path="gen.
 ```
 
 
-### Legacy: IndexTTS1 User Guide
+# IndexTTS2: A Zero-shot Text-to-Speech System with Soft Spoken Instructions and Disentangled Emotion Representation
 
-You can also use our previous IndexTTS1 model by importing a different module:
+<div align="center">
+  <img src="assets/logo.png" width="300">
+</div>
 
-```python
-from indextts.infer import IndexTTS
-tts = IndexTTS(model_dir="checkpoints",cfg_path="checkpoints/config.yaml")
-voice = "examples/voice_07.wav"
-text = "大家好，我现在正在bilibili 体验 ai 科技，说实话，来之前我绝对想不到！AI技术已经发展到这样匪夷所思的地步了！比如说，现在正在说话的其实是B站为我现场复刻的数字分身，简直就是平行宇宙的另一个我了。如果大家也想体验更多深入的AIGC功能，可以访问 bilibili studio，相信我，你们也会吃惊的。"
-tts.infer(voice, text, 'gen.wav')
+## 🔥 News
+- **[2025/04/05]** We release IndexTTS2, a breakthrough autoregressive zero-shot TTS system with precise duration control, disentangled emotion representation, and soft spoken instructions.
+- **[2025/04/05]** IndexTTS2 supports both audio and text-based emotion control, enabling fine-grained manipulation of emotional expressions.
+- **[2025/04/05]** The project is open-sourced under the Apache 2.0 license.
+
+## 📖 Introduction
+
+IndexTTS2 is a breakthrough autoregressive zero-shot text-to-speech (TTS) system that features precise duration control, disentangled emotion representation, and soft spoken instructions. It enables high-quality speech synthesis with fine-grained control over speaking style, emotion, and duration.
+
+### 🔍 Key Features
+
+1. **Precise Duration Control**: IndexTTS2 allows users to specify the exact duration of the generated speech, enabling synchronized speech generation for video and animation production.
+2. **Disentangled Emotion Representation**: The system disentangles emotion representation from speaker identity, allowing independent control of emotional expression and voice characteristics.
+3. **Soft Spoken Instructions**: IndexTTS2 supports text-based emotion control, allowing users to describe the desired emotion in natural language.
+4. **Zero-shot Learning**: The system can synthesize speech in unseen voices and emotions without requiring additional training.
+
+## 🚀 Quick Start
+
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/your-org/index-tts.git
+cd index-tts
+
+# Install dependencies
+pip install -e .
 ```
 
-For more detailed information, see [README_INDEXTTS_1_5](archive/README_INDEXTTS_1_5.md),
-or visit the IndexTTS1 repository at <a href="https://github.com/index-tts/index-tts/tree/v1.5.0">index-tts:v1.5.0</a>.
+### Download Models
 
+Download the model checkpoints from [Hugging Face](https://huggingface.co/your-org/index-tts) and place them in the `checkpoints` directory.
 
-## Our Releases and Demos
+### CLI Usage
 
-### IndexTTS2: [[Paper]](https://arxiv.org/abs/2506.21619); [[Demo]](https://index-tts.github.io/index-tts2.github.io/); [[HuggingFace]](https://huggingface.co/spaces/IndexTeam/IndexTTS-2-Demo)
-
-### IndexTTS1: [[Paper]](https://arxiv.org/abs/2502.05512); [[Demo]](https://index-tts.github.io/); [[ModelScope]](https://modelscope.cn/studios/IndexTeam/IndexTTS-Demo); [[HuggingFace]](https://huggingface.co/spaces/IndexTeam/IndexTTS)
-
-
-## Acknowledgements
-
-1. [tortoise-tts](https://github.com/neonbjb/tortoise-tts)
-2. [XTTSv2](https://github.com/coqui-ai/TTS)
-3. [BigVGAN](https://github.com/NVIDIA/BigVGAN)
-4. [wenet](https://github.com/wenet-e2e/wenet/tree/main)
-5. [icefall](https://github.com/k2-fsa/icefall)
-6. [maskgct](https://github.com/open-mmlab/Amphion/tree/main/models/tts/maskgct)
-7. [seed-vc](https://github.com/Plachtaa/seed-vc)
-
-
-## 📚 Citation
-
-🌟 If you find our work helpful, please leave us a star and cite our paper.
-
-
-IndexTTS2:
-
-```
-@article{zhou2025indextts2,
-  title={IndexTTS2: A Breakthrough in Emotionally Expressive and Duration-Controlled Auto-Regressive Zero-Shot Text-to-Speech},
-  author={Siyi Zhou, Yiquan Zhou, Yi He, Xun Zhou, Jinchao Wang, Wei Deng, Jingchen Shu},
-  journal={arXiv preprint arXiv:2506.21619},
-  year={2025}
-}
+```bash
+python -m indextts.cli "你好，世界！" --prompt prompts/reference.wav --output output.wav
 ```
 
+### Web UI
 
-IndexTTS:
+```bash
+python webui.py
+```
 
-```
-@article{deng2025indextts,
-  title={IndexTTS: An Industrial-Level Controllable and Efficient Zero-Shot Text-To-Speech System},
-  author={Wei Deng, Siyi Zhou, Jingchen Shu, Jinchao Wang, Lu Wang},
-  journal={arXiv preprint arXiv:2502.05512},
-  year={2025},
-  doi={10.48550/arXiv.2502.05512},
-  url={https://arxiv.org/abs/2502.05512}
-}
-```
+## 📚 Documentation
+
+For more detailed information, please refer to the [technical documentation](tech.md).
+
+## 📄 License
+
+This project is licensed under the Apache 2.0 License - see the [LICENSE](LICENSE) file for details.
