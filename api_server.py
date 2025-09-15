@@ -23,6 +23,12 @@ def kill_process_on_port(port):
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             pass
 
+def get_process_memory_usage():
+    """获取当前Python进程的总内存使用情况（MB）"""
+    process = psutil.Process(os.getpid())
+    mem_info = process.memory_info()
+    return mem_info.rss / 1024 / 1024  # MB
+
 class TTSRequest(BaseModel):
     text: str
     spk_audio_prompt: str
@@ -70,12 +76,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-def get_memory_usage():
-    """获取当前内存使用情况（MB）"""
-    process = psutil.Process(os.getpid())
-    mem_info = process.memory_info()
-    return mem_info.rss / 1024 / 1024  # MB
-
 @app.get("/")
 def read_root():
     return {"message": "IndexTTS API is running."}
@@ -95,12 +95,12 @@ async def text_to_speech(request: TTSRequest):
         raise HTTPException(status_code=400, detail=f"Speaker prompt audio file not found: {request.spk_audio_prompt}")
 
     try:
-        print(f">> Memory usage before inference: {get_memory_usage():.2f} MB")
+        print(f">> Process memory usage before inference: {get_process_memory_usage():.2f} MB")
         
-        # 检查当前内存使用情况，如果超过30GB则重启服务
-        current_memory = get_memory_usage()
+        # 检查当前进程内存使用情况，如果超过30GB则重启服务
+        current_memory = get_process_memory_usage()
         if current_memory > 30 * 1024:  # 30GB = 30 * 1024 MB
-            print(f">> Memory usage ({current_memory:.2f} MB) exceeds 30GB. Restarting server to free memory...")
+            print(f">> Process memory usage ({current_memory:.2f} MB) exceeds 30GB. Restarting server to free memory...")
             os.execv(sys.executable, [sys.executable] + sys.argv)
         
         # Create output directory if it doesn't exist
@@ -125,7 +125,7 @@ async def text_to_speech(request: TTSRequest):
 
         if os.path.exists(request.output_path):
             failure_count = 0
-            print(f">> Memory usage after inference: {get_memory_usage():.2f} MB")
+            print(f">> Process memory usage after inference: {get_process_memory_usage():.2f} MB")
             return FileResponse(request.output_path, media_type="audio/wav", filename=os.path.basename(request.output_path))
         else:
             failure_count += 1
@@ -156,7 +156,7 @@ async def text_to_speech(request: TTSRequest):
             # 强制垃圾回收
             gc.collect()
             
-        print(f">> Memory usage after cleanup: {get_memory_usage():.2f} MB")
+        print(f">> Process memory usage after cleanup: {get_process_memory_usage():.2f} MB")
 
 if __name__ == "__main__":
     import argparse
