@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 import torch
 import psutil
 import sys
+import gc
 
 from indextts.infer_v2 import IndexTTS2
 
@@ -14,7 +15,7 @@ def kill_process_on_port(port):
     for proc in psutil.process_iter(['pid', 'name']):
         try:
             p = psutil.Process(proc.info['pid'])
-            for conn in p.connections(kind='inet'):
+            for conn in p.net_connections(kind='inet'):
                 if conn.laddr.port == port:
                     print(f"Port {port} is being used by process {proc.info['pid']} ({proc.info['name']}). Terminating it.")
                     p.kill()
@@ -49,7 +50,7 @@ async def lifespan(app: FastAPI):
         use_fp16 = args.fp16
     elif hasattr(torch, "mps") and torch.backends.mps.is_available():
         device = "mps"
-        use_fp16 = args.fp16
+        use_fp16 = False  # 在MPS上禁用FP16以减少内存使用
     else:
         device = "cpu"
         use_fp16 = False
@@ -68,6 +69,12 @@ async def lifespan(app: FastAPI):
     models.clear()
 
 app = FastAPI(lifespan=lifespan)
+
+def get_memory_usage():
+    """获取当前内存使用情况（MB）"""
+    process = psutil.Process(os.getpid())
+    mem_info = process.memory_info()
+    return mem_info.rss / 1024 / 1024  # MB
 
 @app.get("/")
 def read_root():
@@ -88,6 +95,14 @@ async def text_to_speech(request: TTSRequest):
         raise HTTPException(status_code=400, detail=f"Speaker prompt audio file not found: {request.spk_audio_prompt}")
 
     try:
+        print(f">> Memory usage before inference: {get_memory_usage():.2f} MB")
+        
+        # 检查当前内存使用情况，如果超过30GB则重启服务
+        current_memory = get_memory_usage()
+        if current_memory > 30 * 1024:  # 30GB = 30 * 1024 MB
+            print(f">> Memory usage ({current_memory:.2f} MB) exceeds 30GB. Restarting server to free memory...")
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        
         # Create output directory if it doesn't exist
         output_dir = os.path.dirname(request.output_path)
         if output_dir and not os.path.exists(output_dir):
@@ -110,6 +125,7 @@ async def text_to_speech(request: TTSRequest):
 
         if os.path.exists(request.output_path):
             failure_count = 0
+            print(f">> Memory usage after inference: {get_memory_usage():.2f} MB")
             return FileResponse(request.output_path, media_type="audio/wav", filename=os.path.basename(request.output_path))
         else:
             failure_count += 1
@@ -128,15 +144,26 @@ async def text_to_speech(request: TTSRequest):
             os.execv(sys.executable, [sys.executable] + sys.argv)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        if tts_model and tts_model.device == "mps":
-            torch.mps.empty_cache()
+        # 清理PyTorch缓存，释放GPU/CPU内存
+        if tts_model:
+            if tts_model.device == "mps":
+                torch.mps.empty_cache()
+            elif tts_model.device == "cuda":
+                torch.cuda.empty_cache()
+            # 清理模型内部缓存
+            tts_model.clear_cache()
+            
+            # 强制垃圾回收
+            gc.collect()
+            
+        print(f">> Memory usage after cleanup: {get_memory_usage():.2f} MB")
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="IndexTTS API Server")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to run the API server on.")
     parser.add_argument("--port", type=int, default=8000, help="Port to run the API server on.")
-    parser.add_argument("--fp16", action="store_true", default=True, help="Use FP16 for inference if available")
+    parser.add_argument("--fp16", action="store_true", default=False, help="Use FP16 for inference if available")  # 默认禁用FP16
     args = parser.parse_args()
     kill_process_on_port(args.port)
     print("Starting API server...")

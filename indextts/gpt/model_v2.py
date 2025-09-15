@@ -448,11 +448,12 @@ class UnifiedVoice(nn.Module):
         else:
             self.inference_model = self.inference_model.eval()
 
-        if torch.backends.mps.is_available() and hasattr(torch, 'compile'):
-            # Check for a version of torch that supports torch.compile on MPS
-            if int(torch.__version__.split('.')[0]) >= 2:
-                print(">> Compiling model for MPS, please wait...")
-                self.inference_model = torch.compile(self.inference_model)
+        # 注释掉MPS上的模型编译以减少内存使用
+        # if torch.backends.mps.is_available() and hasattr(torch, 'compile'):
+        #     # Check for a version of torch that supports torch.compile on MPS
+        #     if int(torch.__version__.split('.')[0]) >= 2:
+        #         print(">> Compiling model for MPS, please wait...")
+        #         self.inference_model = torch.compile(self.inference_model)
 
         # self.inference_model = PrunedGPT2InferenceModel(gpt_config, self.gpt, self.mel_pos_embedding, self.mel_embedding, self.final_norm, self.mel_head)
         self.gpt.wte = self.mel_embedding
@@ -728,6 +729,11 @@ class UnifiedVoice(nn.Module):
             min_tokens_to_keep = 2 if hf_generate_kwargs.get("num_beams", 1) > 1 else 1
             logits_processor.append(TypicalLogitsWarper(mass=typical_mass, min_tokens_to_keep=min_tokens_to_keep))
         max_length = (trunc_index + self.max_mel_tokens - 1) if max_generate_length is None else trunc_index + max_generate_length
+        
+        # 在生成前清理内存
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
         output = self.inference_model.generate(inputs, 
                                             bos_token_id=self.start_mel_token, pad_token_id=self.stop_mel_token,
                                             eos_token_id=self.stop_mel_token, attention_mask=attention_mask,
@@ -735,6 +741,11 @@ class UnifiedVoice(nn.Module):
                                             num_return_sequences=num_return_sequences,
                                             remove_invalid_values=True,
                                             **hf_generate_kwargs)
+        
+        # 在生成后清理内存
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
         if isinstance(output, torch.Tensor):
             return output[:, trunc_index:], speech_conditioning_latent
         # GenerateOutput

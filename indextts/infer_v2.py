@@ -36,6 +36,17 @@ from transformers import SeamlessM4TFeatureExtractor
 import random
 import torch.nn.functional as F
 
+# 添加内存监控
+import gc
+import psutil
+import sys
+
+def get_memory_usage():
+    """获取当前内存使用情况"""
+    process = psutil.Process(os.getpid())
+    mem_info = process.memory_info()
+    return mem_info.rss / 1024 / 1024  # MB
+
 class IndexTTS2:
     def __init__(
             self, cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_fp16=True, device=None,
@@ -64,7 +75,7 @@ class IndexTTS2:
             self.use_cuda_kernel = False
         elif hasattr(torch, "mps") and torch.backends.mps.is_available():
             self.device = "mps"
-            self.use_fp16 = False
+            self.use_fp16 = False  # 在MPS上暂时禁用FP16以减少内存使用
             self.use_cuda_kernel = False
         else:
             self.device = "cpu"
@@ -198,6 +209,28 @@ class IndexTTS2:
         self.gr_progress = None
         self.model_version = self.cfg.version if hasattr(self.cfg, "version") else None
 
+    def clear_cache(self):
+        """
+        Clear all cached data to free up memory
+        """
+        self.cache_spk_cond = None
+        self.cache_s2mel_style = None
+        self.cache_s2mel_prompt = None
+        self.cache_spk_audio_prompt = None
+        self.cache_emo_cond = None
+        self.cache_emo_audio_prompt = None
+        self.cache_mel = None
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+        
+        # Clear PyTorch cache
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        elif hasattr(torch, "mps") and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+
     @torch.no_grad()
     def get_emb(self, input_features, attention_mask):
         vq_emb = self.semantic_model(
@@ -298,8 +331,9 @@ class IndexTTS2:
               emo_audio_prompt=None, emo_alpha=1.0,
               emo_vector=None,
               use_emo_text=False, emo_text=None, use_random=False, interval_silence=200,
-              verbose=False, max_text_tokens_per_segment=120, **generation_kwargs):
+              verbose=False, max_text_tokens_per_segment=60, **generation_kwargs):
         print(">> start inference...")
+        print(f">> Memory usage before inference: {get_memory_usage():.2f} MB")
         self._set_gr_progress(0, "start inference...")
         if verbose:
             print(f"origin text:{text}, spk_audio_prompt:{spk_audio_prompt},"
@@ -333,6 +367,7 @@ class IndexTTS2:
 
         # 如果参考音频改变了，才需要重新生成, 提升速度
         if self.cache_spk_cond is None or self.cache_spk_audio_prompt != spk_audio_prompt:
+            print(">> Loading speaker audio prompt...")
             audio, sr = librosa.load(spk_audio_prompt)
             audio = torch.tensor(audio).unsqueeze(0)
             audio_22k = torchaudio.transforms.Resample(sr, 22050)(audio)
@@ -385,6 +420,7 @@ class IndexTTS2:
             emovec_mat = emovec_mat.unsqueeze(0)
 
         if self.cache_emo_cond is None or self.cache_emo_audio_prompt != emo_audio_prompt:
+            print(">> Loading emotion audio prompt...")
             emo_audio, _ = librosa.load(emo_audio_prompt, sr=16000)
             emo_inputs = self.extract_features(emo_audio, sampling_rate=16000, return_tensors="pt")
             emo_input_features = emo_inputs["input_features"]
@@ -399,6 +435,8 @@ class IndexTTS2:
             emo_cond_emb = self.cache_emo_cond
 
         self._set_gr_progress(0.1, "text processing...")
+        
+        # 文本处理参数
         text_tokens_list = self.tokenizer.tokenize(text)
         segments = self.tokenizer.split_segments(text_tokens_list, max_text_tokens_per_segment)
         if verbose:
@@ -406,15 +444,17 @@ class IndexTTS2:
             print("segments count:", len(segments))
             print("max_text_tokens_per_segment:", max_text_tokens_per_segment)
             print(*segments, sep="\n")
+        
+        # 降低默认参数以减少内存使用
         do_sample = generation_kwargs.pop("do_sample", True)
-        top_p = generation_kwargs.pop("top_p", 0.8)
-        top_k = generation_kwargs.pop("top_k", 30)
-        temperature = generation_kwargs.pop("temperature", 0.8)
+        top_p = generation_kwargs.pop("top_p", 0.9)  # 从0.8提高到0.9
+        top_k = generation_kwargs.pop("top_k", 20)   # 从30降低到20
+        temperature = generation_kwargs.pop("temperature", 0.9)  # 从0.8提高到0.9
         autoregressive_batch_size = 1
         length_penalty = generation_kwargs.pop("length_penalty", 0.0)
-        num_beams = generation_kwargs.pop("num_beams", 3)
-        repetition_penalty = generation_kwargs.pop("repetition_penalty", 10.0)
-        max_mel_tokens = generation_kwargs.pop("max_mel_tokens", 1500)
+        num_beams = generation_kwargs.pop("num_beams", 1)  # 从3降低到1
+        repetition_penalty = generation_kwargs.pop("repetition_penalty", 5.0)  # 从10降低到5
+        max_mel_tokens = generation_kwargs.pop("max_mel_tokens", 1000)  # 从1500降低到1000
         sampling_rate = 22050
 
         wavs = []
@@ -424,7 +464,10 @@ class IndexTTS2:
         bigvgan_time = 0
         progress = 0
         has_warned = False
-        for sent in segments:
+        for i, sent in enumerate(segments):
+            print(f">> Processing segment {i+1}/{len(segments)}")
+            print(f">> Memory usage before segment processing: {get_memory_usage():.2f} MB")
+            
             text_tokens = self.tokenizer.convert_tokens_to_ids(sent)
             text_tokens = torch.tensor(text_tokens, dtype=torch.int32, device=self.device).unsqueeze(0)
             if verbose:
@@ -554,6 +597,25 @@ class IndexTTS2:
                     print(f"wav shape: {wav.shape}", "min:", wav.min(), "max:", wav.max())
                 # wavs.append(wav[:, :-512])
                 wavs.append(wav.cpu())  # to cpu before saving
+                
+                # 显式清理本段推理过程中的临时变量
+                del latent, S_infer, target_lengths, cond, cat_condition, vc_target, wav
+                if 'emovec' in locals():
+                    del emovec
+                if 'codes' in locals():
+                    del codes
+                
+                # 强制清理内存
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                elif hasattr(torch, "mps") and torch.backends.mps.is_available():
+                    torch.mps.empty_cache()
+                
+                # 强制垃圾回收
+                gc.collect()
+                
+                print(f">> Memory usage after segment processing: {get_memory_usage():.2f} MB")
+
         end_time = time.perf_counter()
         self._set_gr_progress(0.9, "save audio...")
         wavs = self.insert_interval_silence(wavs, sampling_rate=sampling_rate, interval_silence=interval_silence)
