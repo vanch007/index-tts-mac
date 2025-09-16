@@ -3,6 +3,7 @@ import os
 import sys
 import threading
 import time
+import gc
 
 import warnings
 
@@ -52,9 +53,23 @@ from tools.i18n.i18n import I18nAuto
 
 i18n = I18nAuto(language="Auto")
 MODE = 'local'
+
+# Autodetect device and FP16 support to match API server behavior
+import torch
+if torch.cuda.is_available():
+    device = "cuda"
+    use_fp16 = cmd_args.fp16
+elif hasattr(torch, "mps") and torch.backends.mps.is_available():
+    device = "mps"
+    use_fp16 = False  # 在MPS上禁用FP16以减少内存使用
+else:
+    device = "cpu"
+    use_fp16 = False
+
 tts = IndexTTS2(model_dir=cmd_args.model_dir,
                 cfg_path=os.path.join(cmd_args.model_dir, "config.yaml"),
-                use_fp16=cmd_args.fp16,
+                use_fp16=use_fp16,
+                device=device,
                 use_deepspeed=cmd_args.use_deepspeed,
                 use_cuda_kernel=cmd_args.cuda_kernel,
                 )
@@ -153,6 +168,15 @@ def gen_single(emo_control_method,prompt, text,
                        verbose=cmd_args.verbose,
                        max_text_tokens_per_segment=int(max_text_tokens_per_segment),
                        **kwargs)
+    
+    # 更彻底的内存清理和资源释放
+    tts.clear_cache()
+    if hasattr(torch, "mps") and torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+    
     return gr.update(value=output,visible=True)
 
 def update_prompt_audio():
@@ -221,24 +245,25 @@ with gr.Blocks(title="IndexTTS2: A Breakthrough in Emotionally Expressive and Du
             with gr.Row():
                 with gr.Column(scale=1):
                     gr.Markdown(f"**{i18n('GPT2 采样设置')}** _{i18n('参数会影响音频多样性和生成速度详见')} [Generation strategies](https://huggingface.co/docs/transformers/main/en/generation_strategies)._")
+                    gr.Markdown(f"**{i18n('性能优化提示')}**: {i18n('默认参数已优化以提高推理速度。如需更高音频质量，可适当调整参数，但会增加生成时间。')}")
                     with gr.Row():
-                        do_sample = gr.Checkbox(label="do_sample", value=True, info=i18n("是否进行采样"))
-                        temperature = gr.Slider(label="temperature", minimum=0.1, maximum=2.0, value=0.8, step=0.1)
+                        do_sample = gr.Checkbox(label="do_sample", value=False, info=i18n("是否进行采样"))
+                        temperature = gr.Slider(label="temperature", minimum=0.1, maximum=2.0, value=1.0, step=0.1)
                     with gr.Row():
-                        top_p = gr.Slider(label="top_p", minimum=0.0, maximum=1.0, value=0.8, step=0.01)
-                        top_k = gr.Slider(label="top_k", minimum=0, maximum=100, value=30, step=1)
-                        num_beams = gr.Slider(label="num_beams", value=3, minimum=1, maximum=10, step=1)
+                        top_p = gr.Slider(label="top_p", minimum=0.0, maximum=1.0, value=1.0, step=0.01)
+                        top_k = gr.Slider(label="top_k", minimum=0, maximum=100, value=0, step=1)
+                        num_beams = gr.Slider(label="num_beams", value=1, minimum=1, maximum=10, step=1)
                     with gr.Row():
-                        repetition_penalty = gr.Number(label="repetition_penalty", precision=None, value=10.0, minimum=0.1, maximum=20.0, step=0.1)
-                        length_penalty = gr.Number(label="length_penalty", precision=None, value=0.0, minimum=-2.0, maximum=2.0, step=0.1)
-                    max_mel_tokens = gr.Slider(label="max_mel_tokens", value=1500, minimum=50, maximum=tts.cfg.gpt.max_mel_tokens, step=10, info=i18n("生成Token最大数量，过小导致音频被截断"), key="max_mel_tokens")
+                        repetition_penalty = gr.Number(label="repetition_penalty", precision=None, value=1.0, minimum=0.1, maximum=20.0, step=0.1)
+                        length_penalty = gr.Number(label="length_penalty", precision=None, value=1.0, minimum=-2.0, maximum=2.0, step=0.1)
+                    max_mel_tokens = gr.Slider(label="max_mel_tokens", value=800, minimum=50, maximum=tts.cfg.gpt.max_mel_tokens, step=10, info=i18n("生成Token最大数量，过小导致音频被截断"), key="max_mel_tokens")
                     # with gr.Row():
                     #     typical_sampling = gr.Checkbox(label="typical_sampling", value=False, info="不建议使用")
                     #     typical_mass = gr.Slider(label="typical_mass", value=0.9, minimum=0.0, maximum=1.0, step=0.1)
                 with gr.Column(scale=2):
                     gr.Markdown(f'**{i18n("分句设置")}** _{i18n("参数会影响音频质量和生成速度")}_')
                     with gr.Row():
-                        initial_value = max(20, min(tts.cfg.gpt.max_text_tokens, cmd_args.gui_seg_tokens))
+                        initial_value = max(20, min(60, cmd_args.gui_seg_tokens))
                         max_text_tokens_per_segment = gr.Slider(
                             label=i18n("分句最大Token数"), value=initial_value, minimum=20, maximum=tts.cfg.gpt.max_text_tokens, step=2, key="max_text_tokens_per_segment",
                             info=i18n("建议80~200之间，值越大，分句越长；值越小，分句越碎；过小过大都可能导致音频质量不高"),
