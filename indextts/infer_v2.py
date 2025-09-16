@@ -362,6 +362,114 @@ class IndexTTS2:
         elif hasattr(torch, "mps") and torch.backends.mps.is_available():
             torch.mps.empty_cache()
 
+    def load_speaker_voice(self, voice_path):
+        """
+        Load speaker voice features from disk
+        Args:
+            voice_path: path to saved voice file
+        Returns:
+            tuple of (spk_cond_emb, style, prompt_condition, ref_mel)
+        """
+        import pickle
+        
+        if not os.path.exists(voice_path):
+            raise FileNotFoundError(f"Voice file not found: {voice_path}")
+            
+        with open(voice_path, 'rb') as f:
+            voice_data = pickle.load(f)
+            
+        # Move tensors to device
+        spk_cond_emb = voice_data['spk_cond_emb'].to(self.device) if voice_data['spk_cond_emb'] is not None else None
+        style = voice_data['style'].to(self.device) if voice_data['style'] is not None else None
+        prompt_condition = voice_data['prompt_condition'].to(self.device) if voice_data['prompt_condition'] is not None else None
+        ref_mel = voice_data['ref_mel'].to(self.device) if voice_data['ref_mel'] is not None else None
+        
+        # Update cache
+        self.cache_spk_cond = spk_cond_emb
+        self.cache_s2mel_style = style
+        self.cache_s2mel_prompt = prompt_condition
+        self.cache_spk_audio_prompt = voice_data['spk_audio_prompt']
+        self.cache_mel = ref_mel
+        
+        print(f">> Speaker voice loaded from: {voice_path}")
+        return spk_cond_emb, style, prompt_condition, ref_mel
+
+    def save_speaker_voice(self, spk_audio_prompt, voice_name=None):
+        """
+        Save speaker voice features to disk for future use
+        Args:
+            spk_audio_prompt: path to speaker audio prompt
+            voice_name: name for the saved voice (optional, defaults to filename)
+        Returns:
+            path to saved voice file
+        """
+        import pickle
+        
+        # 如果参考音频改变了，才需要重新生成, 提升速度
+        if self.cache_spk_cond is None or self.cache_spk_audio_prompt != spk_audio_prompt:
+            print(">> Loading speaker audio prompt...")
+            audio, sr = librosa.load(spk_audio_prompt)
+            audio = torch.tensor(audio).unsqueeze(0)
+            audio_22k = torchaudio.transforms.Resample(sr, 22050)(audio)
+            audio_16k = torchaudio.transforms.Resample(sr, 16000)(audio)
+
+            inputs = self.extract_features(audio_16k, sampling_rate=16000, return_tensors="pt")
+            input_features = inputs["input_features"]
+            attention_mask = inputs["attention_mask"]
+            input_features = input_features.to(self.device)
+            attention_mask = attention_mask.to(self.device)
+            spk_cond_emb = self.get_emb(input_features, attention_mask)
+
+            _, S_ref = self.semantic_codec.quantize(spk_cond_emb)
+            ref_mel = self.mel_fn(audio_22k.to(spk_cond_emb.device).float())
+            ref_target_lengths = torch.LongTensor([ref_mel.size(2)]).to(ref_mel.device)
+            feat = torchaudio.compliance.kaldi.fbank(audio_16k.to(ref_mel.device),
+                                                     num_mel_bins=80,
+                                                     dither=0,
+                                                     sample_frequency=16000)
+            feat = feat - feat.mean(dim=0, keepdim=True)  # feat2另外一个滤波器能量组特征[922, 80]
+            style = self.campplus_model(feat.unsqueeze(0))  # 参考音频的全局style2[1,192]
+
+            prompt_condition = self.s2mel.models['length_regulator'](S_ref,
+                                                                     ylens=ref_target_lengths,
+                                                                     n_quantizers=3,
+                                                                     f0=None)[0]
+
+            self.cache_spk_cond = spk_cond_emb
+            self.cache_s2mel_style = style
+            self.cache_s2mel_prompt = prompt_condition
+            self.cache_spk_audio_prompt = spk_audio_prompt
+            self.cache_mel = ref_mel
+        else:
+            style = self.cache_s2mel_style
+            prompt_condition = self.cache_s2mel_prompt
+            spk_cond_emb = self.cache_spk_cond
+            ref_mel = self.cache_mel
+            
+        # Prepare voice data for saving
+        voice_data = {
+            'spk_cond_emb': spk_cond_emb.cpu() if spk_cond_emb is not None else None,
+            'style': style.cpu() if style is not None else None,
+            'prompt_condition': prompt_condition.cpu() if prompt_condition is not None else None,
+            'ref_mel': ref_mel.cpu() if ref_mel is not None else None,
+            'spk_audio_prompt': spk_audio_prompt
+        }
+        
+        # Generate voice name if not provided
+        if voice_name is None:
+            voice_name = os.path.splitext(os.path.basename(spk_audio_prompt))[0]
+            
+        # Create voices directory if it doesn't exist
+        os.makedirs('voices', exist_ok=True)
+        
+        # Save voice data
+        voice_path = os.path.join('voices', f'{voice_name}.pkl')
+        with open(voice_path, 'wb') as f:
+            pickle.dump(voice_data, f)
+            
+        print(f">> Speaker voice saved to: {voice_path}")
+        return voice_path
+
     @torch.no_grad()
     def get_emb(self, input_features, attention_mask):
         vq_emb = self.semantic_model(
@@ -503,7 +611,12 @@ class IndexTTS2:
 
         # 如果参考音频改变了，才需要重新生成, 提升速度
         loading_start_time = time.perf_counter()
-        if self.cache_spk_cond is None or self.cache_spk_audio_prompt != spk_audio_prompt:
+        
+        # 检查spk_audio_prompt是否为保存的音色文件
+        if spk_audio_prompt.endswith('.pkl') and os.path.exists(spk_audio_prompt):
+            # 直接加载预保存的音色信息
+            spk_cond_emb, style, prompt_condition, ref_mel = self.load_speaker_voice(spk_audio_prompt)
+        elif self.cache_spk_cond is None or self.cache_spk_audio_prompt != spk_audio_prompt:
             print(">> Loading speaker audio prompt...")
             audio, sr = librosa.load(spk_audio_prompt)
             audio = torch.tensor(audio).unsqueeze(0)
@@ -558,16 +671,23 @@ class IndexTTS2:
             emovec_mat = torch.sum(emovec_mat, 0)
             emovec_mat = emovec_mat.unsqueeze(0)
 
+        # 处理情感音频
         if self.cache_emo_cond is None or self.cache_emo_audio_prompt != emo_audio_prompt:
-            print(">> Loading emotion audio prompt...")
-            emo_audio, _ = librosa.load(emo_audio_prompt, sr=16000)
-            emo_inputs = self.extract_features(emo_audio, sampling_rate=16000, return_tensors="pt")
-            emo_input_features = emo_inputs["input_features"]
-            emo_attention_mask = emo_inputs["attention_mask"]
-            emo_input_features = emo_input_features.to(self.device)
-            emo_attention_mask = emo_attention_mask.to(self.device)
-            emo_cond_emb = self.get_emb(emo_input_features, emo_attention_mask)
-
+            # 检查emo_audio_prompt是否为保存的音色文件
+            if emo_audio_prompt.endswith('.pkl') and os.path.exists(emo_audio_prompt):
+                # 直接加载预保存的情感音色信息
+                print(">> Loading emotion voice from saved file...")
+                emo_cond_emb, _, _, _ = self.load_speaker_voice(emo_audio_prompt)
+            else:
+                print(">> Loading emotion audio prompt...")
+                emo_audio, _ = librosa.load(emo_audio_prompt, sr=16000)
+                emo_inputs = self.extract_features(emo_audio, sampling_rate=16000, return_tensors="pt")
+                emo_input_features = emo_inputs["input_features"]
+                emo_attention_mask = emo_inputs["attention_mask"]
+                emo_input_features = emo_input_features.to(self.device)
+                emo_attention_mask = emo_attention_mask.to(self.device)
+                emo_cond_emb = self.get_emb(emo_input_features, emo_attention_mask)
+            
             self.cache_emo_cond = emo_cond_emb
             self.cache_emo_audio_prompt = emo_audio_prompt
         else:

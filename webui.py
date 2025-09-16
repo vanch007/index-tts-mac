@@ -114,15 +114,20 @@ with open("examples/cases.jsonl", "r", encoding="utf-8") as f:
                              )
 
 
-def gen_single(emo_control_method,prompt, text,
-               emo_ref_path, emo_weight,
+def gen_single(emo_control_method, prompt_audio, input_text_single, emo_upload, emo_weight,
                vec1, vec2, vec3, vec4, vec5, vec6, vec7, vec8,
-               emo_text,emo_random,
+               emo_text, emo_random, 
+               saved_voice_top, use_saved_voice_checkbox_top,
                max_text_tokens_per_segment=120,
-                *args, progress=gr.Progress()):
+               *args, progress=gr.Progress()):
     output_path = None
     if not output_path:
         output_path = os.path.join("outputs", f"spk_{int(time.time())}.wav")
+    
+    # 优先使用顶部已保存的音色
+    if use_saved_voice_checkbox_top and saved_voice_top:
+        prompt_audio = os.path.join("voices", f"{saved_voice_top}.pkl")
+    
     # set gradio progress
     tts.gr_progress = progress
     do_sample, top_p, top_k, temperature, \
@@ -142,7 +147,7 @@ def gen_single(emo_control_method,prompt, text,
     if type(emo_control_method) is not int:
         emo_control_method = emo_control_method.value
     if emo_control_method == 0:
-        emo_ref_path = None
+        emo_upload = None
         emo_weight = 1.0
     if emo_control_method == 1:
         emo_weight = emo_weight
@@ -160,9 +165,9 @@ def gen_single(emo_control_method,prompt, text,
         emo_text = None
 
     print(f"Emo control mode:{emo_control_method},vec:{vec}")
-    output = tts.infer(spk_audio_prompt=prompt, text=text,
+    output = tts.infer(spk_audio_prompt=prompt_audio, text=input_text_single,
                        output_path=output_path,
-                       emo_audio_prompt=emo_ref_path, emo_alpha=emo_weight,
+                       emo_audio_prompt=emo_upload, emo_alpha=emo_weight,
                        emo_vector=vec,
                        use_emo_text=(emo_control_method==3), emo_text=emo_text,use_random=emo_random,
                        verbose=cmd_args.verbose,
@@ -187,23 +192,35 @@ with gr.Blocks(title="IndexTTS2: A Breakthrough in Emotionally Expressive and Du
     mutex = threading.Lock()
     gr.HTML('''
     <h2><center>IndexTTS2: A Breakthrough in Emotionally Expressive and Duration-Controlled Auto-Regressive Zero-Shot Text-to-Speech</h2>
-<p align="center">
-<a href='https://arxiv.org/abs/2506.21619'><img src='https://img.shields.io/badge/ArXiv-2506.21619-red'></a>
-</p>
+    <p align="center">
+    <a href='https://arxiv.org/abs/2506.21619'><img src='https://img.shields.io/badge/ArXiv-2506.21619-red'></a>
+    </p>
     ''')
     with gr.Tab(i18n("音频生成")):
         with gr.Row():
-            os.makedirs("prompts",exist_ok=True)
-            prompt_audio = gr.Audio(label=i18n("音色参考音频"),key="prompt_audio",
-                                    sources=["upload","microphone"],type="filepath")
+            # 添加音色下拉选项框
+            with gr.Column():
+                # 初始化音色列表
+                try:
+                    os.makedirs('voices', exist_ok=True)
+                    voice_files = [f for f in os.listdir('voices') if f.endswith('.pkl')]
+                    voice_names = [os.path.splitext(f)[0] for f in voice_files]
+                except Exception as e:
+                    print(f"初始化音色列表时出错: {e}")
+                    voice_names = []
+                
+                saved_voices_top = gr.Dropdown(choices=voice_names, label=i18n("已保存音色"))
+                refresh_voices_button_top = gr.Button(i18n("刷新音色列表"))
+                use_saved_voice_checkbox_top = gr.Checkbox(label=i18n("使用已保存音色"), value=False)
+            prompt_audio = gr.Audio(label=i18n("音色参考音频"), key="prompt_audio", sources=["upload", "microphone"], type="filepath")
             prompt_list = os.listdir("prompts")
             default = ''
             if prompt_list:
                 default = prompt_list[0]
             with gr.Column():
-                input_text_single = gr.TextArea(label=i18n("文本"),key="input_text_single", placeholder=i18n("请输入目标文本"), info=f"{i18n('当前模型版本')}{tts.model_version or '1.0'}")
-                gen_button = gr.Button(i18n("生成语音"), key="gen_button",interactive=True)
-            output_audio = gr.Audio(label=i18n("生成结果"), visible=True,key="output_audio")
+                input_text_single = gr.TextArea(label=i18n("文本"), key="input_text_single", placeholder=i18n("请输入目标文本"), info=f"{i18n('当前模型版本')}{tts.model_version or '1.0'}")
+                gen_button = gr.Button(i18n("生成语音"), key="gen_button", interactive=True)
+            output_audio = gr.Audio(label=i18n("生成结果"), visible=True, key="output_audio")
         with gr.Accordion(i18n("功能设置")):
             # 情感控制选项部分
             with gr.Row():
@@ -211,6 +228,13 @@ with gr.Blocks(title="IndexTTS2: A Breakthrough in Emotionally Expressive and Du
                     choices=EMO_CHOICES,
                     type="index",
                     value=EMO_CHOICES[0],label=i18n("情感控制方式"))
+        # 音色保存选项
+        with gr.Group():
+            with gr.Row():
+                voice_name = gr.Textbox(label=i18n("音色名称"), placeholder=i18n("请输入音色名称，留空则使用音频文件名"))
+                save_voice_button = gr.Button(i18n("保存当前音色"))
+                save_status = gr.Textbox(label=i18n("保存状态"), interactive=False)
+        
         # 情感参考音频部分
         with gr.Group(visible=False) as emotion_reference_group:
             with gr.Row():
@@ -337,6 +361,34 @@ with gr.Blocks(title="IndexTTS2: A Breakthrough in Emotionally Expressive and Du
                     gr.update(visible=False)
                     )
 
+    def save_voice(spk_audio_path, voice_name):
+        if not spk_audio_path:
+            return i18n("请先上传音色参考音频")
+        
+        try:
+            voice_path = tts.save_speaker_voice(spk_audio_path, voice_name)
+            return f"{i18n('音色保存成功')}: {voice_path}"
+        except Exception as e:
+            return f"{i18n('音色保存失败')}: {str(e)}"
+
+    def refresh_voices():
+        os.makedirs('voices', exist_ok=True)
+        voice_files = [f for f in os.listdir('voices') if f.endswith('.pkl')]
+        voice_names = [os.path.splitext(f)[0] for f in voice_files]
+        return gr.update(choices=voice_names)
+
+    def use_saved_voice_checkbox_change(use_saved):
+        return gr.update(visible=use_saved), gr.update(visible=not use_saved)
+
+    def refresh_voices_top():
+        os.makedirs('voices', exist_ok=True)
+        voice_files = [f for f in os.listdir('voices') if f.endswith('.pkl')]
+        voice_names = [os.path.splitext(f)[0] for f in voice_files]
+        return gr.update(choices=voice_names)
+    
+    def use_saved_voice_checkbox_top_change(use_saved):
+        return gr.update(visible=use_saved), gr.update(visible=not use_saved)
+
     emo_control_method.select(on_method_select,
         inputs=[emo_control_method],
         outputs=[emotion_reference_group,
@@ -359,10 +411,28 @@ with gr.Blocks(title="IndexTTS2: A Breakthrough in Emotionally Expressive and Du
                          inputs=[],
                          outputs=[gen_button])
 
+    save_voice_button.click(
+        save_voice,
+        inputs=[prompt_audio, voice_name],
+        outputs=[save_status]
+    )
+
+    refresh_voices_button_top.click(
+        refresh_voices_top,
+        outputs=[saved_voices_top]
+    )
+
+    use_saved_voice_checkbox_top.change(
+        use_saved_voice_checkbox_top_change,
+        inputs=[use_saved_voice_checkbox_top],
+        outputs=[saved_voices_top, prompt_audio]
+    )
+
     gen_button.click(gen_single,
-                     inputs=[emo_control_method,prompt_audio, input_text_single, emo_upload, emo_weight,
+                     inputs=[emo_control_method, prompt_audio, input_text_single, emo_upload, emo_weight,
                             vec1, vec2, vec3, vec4, vec5, vec6, vec7, vec8,
-                             emo_text,emo_random,
+                             emo_text, emo_random, 
+                             saved_voices_top, use_saved_voice_checkbox_top,
                              max_text_tokens_per_segment,
                              *advanced_params,
                      ],
@@ -371,5 +441,16 @@ with gr.Blocks(title="IndexTTS2: A Breakthrough in Emotionally Expressive and Du
 
 
 if __name__ == "__main__":
+    # 初始化顶部音色下拉框
+    try:
+        os.makedirs('voices', exist_ok=True)
+        voice_files = [f for f in os.listdir('voices') if f.endswith('.pkl')]
+        voice_names = [os.path.splitext(f)[0] for f in voice_files]
+        # 更新顶部和底部的音色下拉框
+        # 注意：在Gradio中，不能直接设置choices属性，需要通过更新函数来设置
+        pass  # 实际的初始化将在应用启动后通过刷新按钮完成
+    except Exception as e:
+        print(f"初始化音色列表时出错: {e}")
+    
     demo.queue(20)
     demo.launch(server_name=cmd_args.host, server_port=cmd_args.port)
