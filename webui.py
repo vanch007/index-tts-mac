@@ -118,6 +118,7 @@ def gen_single(emo_control_method, prompt_audio, input_text_single, emo_upload, 
                vec1, vec2, vec3, vec4, vec5, vec6, vec7, vec8,
                emo_text, emo_random, 
                saved_voice_top, use_saved_voice_checkbox_top,
+               emo_reference_file, use_emo_reference_checkbox,
                max_text_tokens_per_segment=120,
                *args, progress=gr.Progress()):
     output_path = None
@@ -127,6 +128,10 @@ def gen_single(emo_control_method, prompt_audio, input_text_single, emo_upload, 
     # 优先使用顶部已保存的音色
     if use_saved_voice_checkbox_top and saved_voice_top:
         prompt_audio = os.path.join("voices", f"{saved_voice_top}.pkl")
+    
+    # 处理情感参考音频
+    if emo_control_method == 1 and use_emo_reference_checkbox and emo_reference_file:
+        emo_upload = os.path.join("情感参考", emo_reference_file)
     
     # set gradio progress
     tts.gr_progress = progress
@@ -237,6 +242,21 @@ with gr.Blocks(title="IndexTTS2: A Breakthrough in Emotionally Expressive and Du
         
         # 情感参考音频部分
         with gr.Group(visible=False) as emotion_reference_group:
+            with gr.Row():
+                # 添加情感参考音频下拉选项
+                try:
+                    os.makedirs('情感参考', exist_ok=True)
+                    emo_audio_files = [f for f in os.listdir('情感参考') if f.endswith(('.wav', '.mp3', '.flac'))]
+                    emo_audio_paths = [os.path.join('情感参考', f) for f in emo_audio_files]
+                except Exception as e:
+                    print(f"初始化情感参考音频列表时出错: {e}")
+                    emo_audio_files = []
+                    emo_audio_paths = []
+                
+                emo_reference_dropdown = gr.Dropdown(choices=emo_audio_files, label=i18n("选择情感参考音频"))
+                refresh_emo_reference_button = gr.Button(i18n("刷新情感参考列表"))
+                use_emo_reference_checkbox = gr.Checkbox(label=i18n("使用预设情感参考"), value=False)
+                
             with gr.Row():
                 emo_upload = gr.Audio(label=i18n("上传情感参考音频"), type="filepath")
 
@@ -389,6 +409,18 @@ with gr.Blocks(title="IndexTTS2: A Breakthrough in Emotionally Expressive and Du
     def use_saved_voice_checkbox_top_change(use_saved):
         return gr.update(visible=use_saved), gr.update(visible=not use_saved)
 
+    def refresh_emo_reference_list():
+        try:
+            os.makedirs('情感参考', exist_ok=True)
+            emo_audio_files = [f for f in os.listdir('情感参考') if f.endswith(('.wav', '.mp3', '.flac'))]
+        except Exception as e:
+            print(f"刷新情感参考音频列表时出错: {e}")
+            emo_audio_files = []
+        return gr.update(choices=emo_audio_files)
+    
+    def use_emo_reference_checkbox_change(use_emo_ref):
+        return gr.update(visible=use_emo_ref), gr.update(visible=not use_emo_ref)
+
     emo_control_method.select(on_method_select,
         inputs=[emo_control_method],
         outputs=[emotion_reference_group,
@@ -427,12 +459,24 @@ with gr.Blocks(title="IndexTTS2: A Breakthrough in Emotionally Expressive and Du
         inputs=[use_saved_voice_checkbox_top],
         outputs=[saved_voices_top, prompt_audio]
     )
+    
+    refresh_emo_reference_button.click(
+        refresh_emo_reference_list,
+        outputs=[emo_reference_dropdown]
+    )
+    
+    use_emo_reference_checkbox.change(
+        use_emo_reference_checkbox_change,
+        inputs=[use_emo_reference_checkbox],
+        outputs=[emo_reference_dropdown, emo_upload]
+    )
 
     gen_button.click(gen_single,
                      inputs=[emo_control_method, prompt_audio, input_text_single, emo_upload, emo_weight,
                             vec1, vec2, vec3, vec4, vec5, vec6, vec7, vec8,
                              emo_text, emo_random, 
                              saved_voices_top, use_saved_voice_checkbox_top,
+                             emo_reference_dropdown, use_emo_reference_checkbox,
                              max_text_tokens_per_segment,
                              *advanced_params,
                      ],
@@ -451,6 +495,15 @@ if __name__ == "__main__":
         pass  # 实际的初始化将在应用启动后通过刷新按钮完成
     except Exception as e:
         print(f"初始化音色列表时出错: {e}")
+    
+    # 初始化情感参考音频下拉框
+    try:
+        os.makedirs('情感参考', exist_ok=True)
+        emo_audio_files = [f for f in os.listdir('情感参考') if f.endswith(('.wav', '.mp3', '.flac'))]
+        # 实际的初始化将在应用启动后通过刷新按钮完成
+        pass
+    except Exception as e:
+        print(f"初始化情感参考音频列表时出错: {e}")
     
     demo.queue(20)
     demo.launch(server_name=cmd_args.host, server_port=cmd_args.port)
